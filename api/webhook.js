@@ -2,46 +2,36 @@ import crypto from 'crypto';
 import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+  if (req.method !== 'POST') return res.status(405).end();
+
+  // Use raw body from request (Vercel passes parsed JSON by default)
+  const payload = JSON.stringify(req.body); // ok for Vercel default
+
+  const signature = req.headers['x-fourthwall-signature'];
+  const secret = process.env.FOURTHWALL_HMAC_SECRET;
+
+  if (!secret) {
+    console.error('HMAC secret not set!');
+    return res.status(500).json({ error: 'HMAC secret missing' });
   }
 
-  const payload = JSON.stringify(req.body);
-  const signature = req.headers['x-fourthwall-signature'];
+  const digest = crypto
+    .createHmac('sha256', secret)
+    .update(payload)
+    .digest('base64');
 
-  // Verify HMAC signature if provided
-  if (process.env.FOURTHWALL_HMAC_SECRET) {
-    const hmac = crypto.createHmac('sha256', process.env.FOURTHWALL_HMAC_SECRET);
-    hmac.update(payload);
-    const digest = hmac.digest('base64');
-
-    if (digest !== signature) {
-      console.warn('Invalid HMAC signature');
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  if (digest !== signature) {
+    console.warn('Invalid HMAC signature');
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   console.log('Webhook verified:', req.body);
 
-  // Pull total amount & currency from Fourthwall payload
-  const totalAmount = req.body.data?.amounts?.total?.amount;
-  const currency = req.body.data?.amounts?.total?.currency || 'USD';
-  const customerEmail = req.body.data?.email;
-  const externalId = req.body.id;
-
-  if (!totalAmount || !customerEmail || !externalId) {
-    console.error('Missing required data for Tapfiliate conversion');
-    return res.status(400).json({ error: 'Missing required conversion data' });
-  }
-
   const conversionData = {
     program_id: process.env.TAPFILIATE_PROGRAM_ID,
-    amount: totalAmount,
-    external_id: externalId,
-    customer_email: customerEmail,
-    currency: currency,
-    status: 'approved' // optional: approved or pending
+    amount: req.body.data.amounts.total.amount,
+    external_id: req.body.id,
+    customer_email: req.body.data.email
   };
 
   try {
