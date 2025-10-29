@@ -1,72 +1,74 @@
+import express from "express";
+import bodyParser from "body-parser";
 import fetch from "node-fetch";
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
+const app = express();
+app.use(bodyParser.json());
 
+const TAPFILIATE_API_KEY = process.env.TAPFILIATE_API_KEY;
+
+// --- Fourthwall Webhook Endpoint ---
+app.post("/fourthwall-webhook", async (req, res) => {
   try {
-    console.log("Webhook received:", req.body);
+    const body = req.body;
 
-    const event = req.body;
-    const order = event.data;
+    console.log("🔔 Webhook received:", JSON.stringify(body, null, 2));
 
+    const eventType = body?.type;
+    const order = body?.data?.order;
+
+    // Ignore if no order data
     if (!order) {
-      return res.status(400).json({ error: "No order data in webhook" });
+      console.error("❌ No order data found.");
+      return res.status(400).send("No order data");
     }
 
-    // ✅ Extract required values
-    const email = order.email || "unknown@example.com";
-    const externalId = order.id || "no-id";
-    const amount = parseFloat(order.amounts?.total?.amount || 0);
-    const currency = order.amounts?.total?.currency || "USD";
-
-    // ✅ Capture visitor_id (from UTM or cookie)
-    const visitor_id =
-      order.trackingParams?.tapfiliate_click_id ||
-      order.trackingParams?.visitor_id ||
-      order.trackingParams?.utm_term || // fallback
+    // Extract the amount safely
+    const amount = order?.amounts?.total?.value || 0;
+    const currency = order?.amounts?.total?.currency || "USD";
+    const externalId = order?.id;
+    const affiliateRef =
+      order?.trackingParams?.ref ||
+      order?.trackingParams?.affiliate ||
+      order?.trackingParams?.affiliate_id ||
       null;
 
-    if (!visitor_id) {
-      console.warn("⚠️ Missing visitor_id in order:", order);
-    }
+    console.log("💰 Order Amount:", amount, currency);
+    console.log("🧠 Affiliate Ref:", affiliateRef);
 
-    console.log("Sending to Tapfiliate:", {
-      visitor_id,
-      externalId,
-      email,
-      amount,
-      currency,
-      program_id: process.env.TAPFILIATE_PROGRAM_ID,
-    });
+    // Only fire when an order is completed or delivered
+    if (eventType === "ORDER_UPDATED" && order.status === "DELIVERED") {
+      console.log("🚀 Sending conversion to Tapfiliate...");
 
-    // ✅ Send conversion to Tapfiliate
-    const tapfiliateResponse = await fetch(
-      "https://api.tapfiliate.com/1.6/conversions/",
-      {
+      const response = await fetch("https://api.tapfiliate.com/1.6/conversions/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Api-Key": process.env.TAPFILIATE_KEY,
+          "Api-Key": TAPFILIATE_API_KEY,
         },
         body: JSON.stringify({
-          visitor_id,
           external_id: externalId,
-          customer_email: email,
           amount,
           currency,
-          program_id: process.env.TAPFILIATE_PROGRAM_ID,
+          referral_code: affiliateRef,
         }),
-      }
-    );
+      });
 
-    const data = await tapfiliateResponse.json();
-    console.log("Tapfiliate response:", data);
+      const result = await response.json();
+      console.log("✅ Tapfiliate response:", result);
+    } else {
+      console.log("ℹ️ Order not completed yet, skipping conversion.");
+    }
 
-    res.status(200).json({ status: "success", tapfiliate: data });
-  } catch (error) {
-    console.error("Error processing webhook:", error);
-    res.status(500).json({ error: error.message });
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("🔥 Webhook error:", err);
+    res.sendStatus(500);
   }
-}
+});
+
+// --- Start server ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`✅ Webhook server running on port ${PORT}`);
+});
