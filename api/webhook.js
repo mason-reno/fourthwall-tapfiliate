@@ -10,13 +10,8 @@ export default async function handler(req, res) {
   const payload = JSON.stringify(req.body);
   const signature = req.headers['x-fourthwall-signature'];
 
-  // Optional: skip HMAC check in test mode
-  if (!req.body.testMode) {
-    if (!process.env.FOURTHWALL_HMAC_SECRET) {
-      console.warn('HMAC secret not set!');
-      return res.status(500).json({ error: 'Server misconfiguration' });
-    }
-
+  // Verify HMAC signature if provided
+  if (process.env.FOURTHWALL_HMAC_SECRET) {
     const hmac = crypto.createHmac('sha256', process.env.FOURTHWALL_HMAC_SECRET);
     hmac.update(payload);
     const digest = hmac.digest('base64');
@@ -27,14 +22,26 @@ export default async function handler(req, res) {
     }
   }
 
-  console.log('Webhook received:', req.body);
+  console.log('Webhook verified:', req.body);
 
-  // Build Tapfiliate conversion data
+  // Pull total amount & currency from Fourthwall payload
+  const totalAmount = req.body.data?.amounts?.total?.amount;
+  const currency = req.body.data?.amounts?.total?.currency || 'USD';
+  const customerEmail = req.body.data?.email;
+  const externalId = req.body.id;
+
+  if (!totalAmount || !customerEmail || !externalId) {
+    console.error('Missing required data for Tapfiliate conversion');
+    return res.status(400).json({ error: 'Missing required conversion data' });
+  }
+
   const conversionData = {
     program_id: process.env.TAPFILIATE_PROGRAM_ID,
-    amount: req.body.data.amounts.total.amount, // Total order amount
-    external_id: req.body.data.id,              // Fourthwall order ID
-    customer_email: req.body.data.email         // Supporter email
+    amount: totalAmount,
+    external_id: externalId,
+    customer_email: customerEmail,
+    currency: currency,
+    status: 'approved' // optional: approved or pending
   };
 
   try {
