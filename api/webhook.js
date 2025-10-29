@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
@@ -7,37 +6,16 @@ export default async function handler(req, res) {
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
-  // Check env variables
-  const HMAC_SECRET = process.env.FOURTHWALL_HMAC_SECRET;
-  const TAPFILIATE_KEY = process.env.TAPFILIATE_KEY;
-  const TAPFILIATE_PROGRAM_ID = process.env.TAPFILIATE_PROGRAM_ID;
+  const payload = req.body;
 
-  if (!HMAC_SECRET || !TAPFILIATE_KEY || !TAPFILIATE_PROGRAM_ID) {
-    console.error('Missing environment variables');
-    return res.status(500).json({ error: 'Server misconfiguration' });
-  }
-
-  const payload = JSON.stringify(req.body);
-  const signature = req.headers['x-fourthwall-signature'];
-
-  // Verify HMAC signature
-  const hmac = crypto.createHmac('sha256', HMAC_SECRET);
-  hmac.update(payload);
-  const digest = hmac.digest('base64');
-
-  if (digest !== signature) {
-    console.warn('Invalid HMAC signature');
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  console.log('Webhook verified:', req.body);
+  console.log('Webhook received:', payload);
 
   // Build Tapfiliate conversion data
   const conversionData = {
-    program_id: TAPFILIATE_PROGRAM_ID,
-    amount: req.body.total_amount || 0, // pull from Fourthwall payload
-    external_id: req.body.id || 'unknown_order', // order ID fallback
-    customer_email: req.body.email || 'unknown@example.com' // fallback email
+    program_id: process.env.TAPFILIATE_PROGRAM_ID,
+    amount: payload.total_amount || 0,  // pull from Fourthwall payload
+    external_id: payload.id || `order-${Date.now()}`, // order ID fallback
+    customer_email: payload.email || 'unknown@example.com' // customer email fallback
   };
 
   try {
@@ -45,7 +23,7 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Api-Key': TAPFILIATE_KEY
+        'Api-Key': process.env.TAPFILIATE_KEY
       },
       body: JSON.stringify(conversionData)
     });
