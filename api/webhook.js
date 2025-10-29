@@ -2,39 +2,53 @@ import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const payload = req.body;
-
-  console.log('Webhook received:', payload);
-
-  // Build Tapfiliate conversion data
-  const conversionData = {
-    program_id: process.env.TAPFILIATE_PROGRAM_ID,
-    amount: payload.data.amounts.total.amount, // total amount from order
-    external_id: payload.id,                   // order ID
-    customer_email: payload.data.email         // customer email
-  };
-
-  // Send to Tapfiliate
   try {
-    const tapResponse = await fetch('https://api.tapfiliate.com/1.6/conversions/', {
-      method: 'POST',
+    console.log("Webhook received:", req.body);
+
+    const { data, type } = req.body;
+
+    if (type !== "ORDER_PLACED") {
+      return res.status(200).json({ message: "Ignored non-order webhook" });
+    }
+
+    const amount = data?.amounts?.total?.amount || 0;
+    const currency = data?.amounts?.total?.currency || "USD";
+    const externalId = data?.friendlyId || data?.id || "no-id";
+    const email = data?.email || "no-email@example.com";
+    const visitorId =
+      data?.trackingParams?.utm_source ||
+      data?.trackingParams?.utm_term ||
+      data?.trackingParams?.utm_medium ||
+      "unknown_visitor";
+
+    console.log("Parsed order:", { amount, currency, externalId, email, visitorId });
+
+    // 🔥 Send conversion to Tapfiliate
+    const tapfiliateResponse = await fetch("https://api.tapfiliate.com/1.6/conversions/", {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'Api-Key': process.env.TAPFILIATE_KEY
+        "Content-Type": "application/json",
+        "Api-Key": process.env.TAPFILIATE_KEY,
       },
-      body: JSON.stringify(conversionData)
+      body: JSON.stringify({
+        visitor_id: visitorId,
+        amount,
+        external_id: externalId,
+        customer_email: email,
+        currency,
+        program_id: process.env.TAPFILIATE_PROGRAM_ID,
+      }),
     });
 
-    const tapResult = await tapResponse.json();
-    console.log('Tapfiliate response:', tapResult);
+    const tapResponse = await tapfiliateResponse.json();
+    console.log("Tapfiliate response:", tapResponse);
 
-    res.status(200).json({ status: 'success', tapfiliate: tapResult });
-  } catch (err) {
-    console.error('Error sending to Tapfiliate:', err);
-    res.status(500).json({ error: 'Tapfiliate request failed' });
+    res.status(200).json({ success: true, tapResponse });
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).json({ error: error.message });
   }
 }
