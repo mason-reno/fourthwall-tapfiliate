@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
@@ -6,16 +7,34 @@ export default async function handler(req, res) {
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
-  const payload = req.body;
+  const payload = JSON.stringify(req.body);
+  const signature = req.headers['x-fourthwall-signature'];
 
-  console.log('Webhook received:', payload);
+  // Optional: skip HMAC check in test mode
+  if (!req.body.testMode) {
+    if (!process.env.FOURTHWALL_HMAC_SECRET) {
+      console.warn('HMAC secret not set!');
+      return res.status(500).json({ error: 'Server misconfiguration' });
+    }
+
+    const hmac = crypto.createHmac('sha256', process.env.FOURTHWALL_HMAC_SECRET);
+    hmac.update(payload);
+    const digest = hmac.digest('base64');
+
+    if (digest !== signature) {
+      console.warn('Invalid HMAC signature');
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
+
+  console.log('Webhook received:', req.body);
 
   // Build Tapfiliate conversion data
   const conversionData = {
     program_id: process.env.TAPFILIATE_PROGRAM_ID,
-    amount: payload.total_amount || 0,  // pull from Fourthwall payload
-    external_id: payload.id || `order-${Date.now()}`, // order ID fallback
-    customer_email: payload.email || 'unknown@example.com' // customer email fallback
+    amount: req.body.data.amounts.total.amount, // Total order amount
+    external_id: req.body.data.id,              // Fourthwall order ID
+    customer_email: req.body.data.email         // Supporter email
   };
 
   try {
