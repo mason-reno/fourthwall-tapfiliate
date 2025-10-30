@@ -53,7 +53,22 @@ export default async function handler(req, res) {
       });
     }
 
-    // Tapfiliate conversion payload
+    // Extract referral code from tracking params
+    // Fourthwall should pass through URL params like ?ref=nwu2ntr
+    const trackingParams = order.trackingParams || {};
+    
+    // Check multiple possible locations for the referral code
+    const referralCode = trackingParams.ref || 
+                        trackingParams.tap_ref ||
+                        trackingParams.referral_code ||
+                        order.ref ||
+                        order.referral_code;
+
+    console.log("🔍 Checking for referral code...");
+    console.log("   trackingParams:", JSON.stringify(trackingParams));
+    console.log("   Found referral code:", referralCode || "NONE");
+
+    // Build Tapfiliate conversion payload
     const conversionPayload = {
       program_id: process.env.TAPFILIATE_PROGRAM_ID,
       amount: totalAmount.toString(),
@@ -61,6 +76,28 @@ export default async function handler(req, res) {
       external_id: orderId,
       customer_email: email,
     };
+
+    // Add referral_code if available - THIS IS REQUIRED for affiliate attribution
+    if (referralCode) {
+      conversionPayload.referral_code = referralCode;
+      console.log("✅ Using referral_code:", referralCode);
+    } else {
+      console.log("⚠️  WARNING: No referral code found!");
+      console.log("   This conversion will NOT be attributed to an affiliate.");
+      console.log("   Make sure your affiliate link includes ?ref=CODE");
+      console.log("   and that Fourthwall is configured to pass through URL parameters.");
+      
+      // Tapfiliate requires either click_id or referral_code
+      // Without it, the conversion will be rejected
+      return res.status(400).json({ 
+        error: "No referral code found in order",
+        message: "Affiliate conversions require a referral code. Make sure the customer used an affiliate link with ?ref=CODE parameter.",
+        debug: {
+          trackingParams: trackingParams,
+          order_id: orderId
+        }
+      });
+    }
 
     console.log("💰 Sending to Tapfiliate:", conversionPayload);
 
