@@ -10,7 +10,7 @@ export default async function handler(req, res) {
     console.log("📦 Webhook received:", JSON.stringify(body, null, 2));
 
     // Fourthwall sends order data in body.data
-    const order = body.data;
+    const order = body.data?.order || body.data;
     if (!order) {
       console.error("❌ No order data found in payload");
       return res.status(400).json({ error: "Invalid payload - no order data" });
@@ -37,29 +37,22 @@ export default async function handler(req, res) {
     // Get email
     const email = order.email || "unknown@customer.com";
 
-    // Get order ID - use Fourthwall's order ID
+    // Get order ID - use Fourthwall's order ID as external_id
     const orderId = order.id || body.id;
 
     // Validate we have an amount
     if (!totalAmount || totalAmount === 0) {
       console.error("❌ Amount is zero or invalid");
-      console.error("Order amounts:", JSON.stringify(order.amounts, null, 2));
       return res.status(400).json({ 
-        error: "Could not extract valid amount from order",
-        debug: {
-          amounts: order.amounts,
-          extracted_amount: totalAmount
-        }
+        error: "Could not extract valid amount from order"
       });
     }
 
     // Extract referral code from tracking params
-    // Fourthwall should pass through URL params like ?ref=nwu2ntr
     const trackingParams = order.trackingParams || {};
     
     // Check multiple possible locations for the referral code
     const referralCode = trackingParams.ref || 
-                        trackingParams.tap_ref ||
                         trackingParams.referral_code ||
                         order.ref ||
                         order.referral_code;
@@ -68,52 +61,50 @@ export default async function handler(req, res) {
     console.log("   trackingParams:", JSON.stringify(trackingParams));
     console.log("   Found referral code:", referralCode || "NONE");
 
-    // Build Tapfiliate conversion payload
+    // Tapfiliate Postback API v1.7 payload
     const conversionPayload = {
-      program_id: process.env.TAPFILIATE_PROGRAM_ID,
-      amount: totalAmount.toString(),
-      currency: currency,
       external_id: orderId,
-      customer_email: email,
+      amount: totalAmount.toString(),
+      currency: currency
     };
 
-    // Add referral_code if available - THIS IS REQUIRED for affiliate attribution
+    // Add referral_code if available
     if (referralCode) {
       conversionPayload.referral_code = referralCode;
       console.log("✅ Using referral_code:", referralCode);
     } else {
       console.log("⚠️  WARNING: No referral code found!");
       console.log("   This conversion will NOT be attributed to an affiliate.");
-      console.log("   Make sure your affiliate link includes ?ref=CODE");
-      console.log("   and that Fourthwall is configured to pass through URL parameters.");
       
-      // Tapfiliate requires either click_id or referral_code
-      // Without it, the conversion will be rejected
-      return res.status(400).json({ 
-        error: "No referral code found in order",
-        message: "Affiliate conversions require a referral code. Make sure the customer used an affiliate link with ?ref=CODE parameter.",
+      // Skip Tapfiliate for non-affiliate orders
+      return res.status(200).json({ 
+        success: false,
+        message: "Order received but no referral code found - not sent to Tapfiliate",
         debug: {
-          trackingParams: trackingParams,
-          order_id: orderId
+          amount: totalAmount,
+          currency: currency,
+          order_id: orderId,
+          trackingParams: trackingParams
         }
       });
     }
 
-    console.log("💰 Sending to Tapfiliate:", conversionPayload);
+    console.log("💰 Sending to Tapfiliate Postback API:", conversionPayload);
 
-    // Validate environment variables
-    if (!process.env.TAPFILIATE_API_KEY || !process.env.TAPFILIATE_PROGRAM_ID) {
-      console.error("❌ Missing Tapfiliate credentials");
+    // Validate API key
+    if (!process.env.TAPFILIATE_API_KEY) {
+      console.error("❌ Missing Tapfiliate API key");
       return res.status(500).json({ 
-        error: "Missing TAPFILIATE_API_KEY or TAPFILIATE_PROGRAM_ID" 
+        error: "Missing TAPFILIATE_API_KEY" 
       });
     }
 
-    const tapResponse = await fetch("https://api.tapfiliate.com/1.6/conversions/", {
+    // Send to Tapfiliate Postback API v1.7
+    const tapResponse = await fetch("https://api.tapfiliate.com/1.7/pb/con/c/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Api-Key": process.env.TAPFILIATE_API_KEY,
+        "X-Api-Key": process.env.TAPFILIATE_API_KEY,
       },
       body: JSON.stringify(conversionPayload),
     });
@@ -138,7 +129,8 @@ export default async function handler(req, res) {
         extracted_amount: totalAmount,
         currency: currency,
         order_id: orderId,
-        email: email
+        email: email,
+        referral_code: referralCode
       }
     });
   } catch (err) {
